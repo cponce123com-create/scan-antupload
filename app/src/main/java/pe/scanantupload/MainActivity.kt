@@ -28,6 +28,7 @@ class MainActivity : Activity() {
     private lateinit var onlyBooks: CheckBox
     private val results = mutableListOf<Book>()
     private val cancelled = AtomicBoolean(false)
+    private val rateLimited = AtomicBoolean(false)
     private val preferences by lazy { getSharedPreferences("scan_history", Context.MODE_PRIVATE) }
 
     data class Book(val title: String, val size: String, val date: String, val download: String, val page: String)
@@ -100,6 +101,7 @@ class MainActivity : Activity() {
         val page = pageFor(line) ?: return ScanResult()
         val response = Jsoup.connect(page).timeout(15000).followRedirects(false).ignoreHttpErrors(true).execute()
         if (response.statusCode() == 429 || response.statusCode() == 403) {
+            rateLimited.set(true)
             cancelled.set(true)
             return ScanResult(limited = true)
         }
@@ -125,7 +127,7 @@ class MainActivity : Activity() {
             status.text = "Introduce entre 1 y 100 enlaces o identificadores."; return
         }
         val filter = onlyBooks.isChecked
-        cancelled.set(false); analyze.isEnabled = false
+        rateLimited.set(false); cancelled.set(false); analyze.isEnabled = false
         status.text = "Preparando análisis..."
         worker.execute {
             val pool = Executors.newFixedThreadPool(5)
@@ -188,7 +190,7 @@ class MainActivity : Activity() {
             } finally {
                 pool.shutdownNow()
                 active.clear(); showActive()
-                val wasLimited = limited
+                val wasLimited = limited || rateLimited.get()
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
                         analyze.isEnabled = true
