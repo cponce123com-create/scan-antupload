@@ -91,60 +91,99 @@ class MainActivity : Activity() {
             else "https://www.antupload.com" + uri.path
         } catch (_: Exception) { null }
     }
+    private data class ScanResult(val book: Book? = null, val limited: Boolean = false)
+
+    private fun inspect(line: String, filter: Boolean): ScanResult {
+        val page = pageFor(line) ?: return ScanResult()
+        val response = Jsoup.connect(page).timeout(15000).followRedirects(false).ignoreHttpErrors(true).execute()
+        if (response.statusCode() == 429 || response.statusCode() == 403) {
+            cancelled.set(true)
+            return ScanResult(limited = true)
+        }
+        if (response.statusCode() != 200) return ScanResult()
+        val doc = response.parse()
+        val desc = doc.selectFirst("#fileDescription") ?: return ScanResult()
+        fun field(label: String): String = desc.select("p").firstOrNull {
+            it.selectFirst("span")?.text()?.trim()?.equals("$" + "label:", true) == true
+        }?.ownText()?.trim().orEmpty()
+        val title = field("Name")
+        val href = doc.selectFirst("#fileDownload a#downloadB")?.attr("abs:href").orEmpty()
+        val link = URI(href)
+        if (title.isBlank() || link.scheme != "https" ||
+            link.host?.lowercase() !in setOf("antupload.com", "www.antupload.com") ||
+            link.path?.startsWith("/filed/") != true || link.userInfo != null || link.port != -1) return ScanResult()
+        if (filter && title.substringAfterLast('.', "").lowercase() !in setOf("epub", "pdf", "mobi")) return ScanResult()
+        return ScanResult(book = Book(title, field("Size"), field("Uploaded"), href, page))
+    }
+
     private fun scan(automatic: Boolean = false) {
         val manualLines = input.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-        if (!automatic && (manualLines.isEmpty() || manualLines.size > 100)) { status.text = "Introduce entre 1 y 100 enlaces o identificadores."; return }
+        if (!automatic && (manualLines.isEmpty() || manualLines.size > 100)) {
+            status.text = "Introduce entre 1 y 100 enlaces o identificadores."; return
+        }
         val filter = onlyBooks.isChecked
         cancelled.set(false); analyze.isEnabled = false
         status.text = "Preparando análisis..."
         worker.execute {
-            var failures = 0L
-            var checked = 0L
-            var batch = 0L
+            val pool = Executors.newFixedThreadPool(5)
+            val completion = java.util.concurrent.ExecutorCompletionService<ScanResult>(pool)
             val random = java.security.SecureRandom()
             val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-            do {
-              batch++
-              val lines = if (automatic) List(100) {
-                  (1..8).map { alphabet[random.nextInt(alphabet.length)] }.joinToString("")
-              } else manualLines
-              for ((index, line) in lines.withIndex()) {
-                if (cancelled.get() || Thread.currentThread().isInterrupted) break
-                try {
-                    val page = pageFor(line) ?: throw IllegalArgumentException("Enlace no válido")
-                    val response = Jsoup.connect(page).timeout(15000).followRedirects(false).ignoreHttpErrors(true).execute()
-                    if (response.statusCode() == 429 || response.statusCode() == 403) {
-                        cancelled.set(true)
-                        throw IllegalStateException("Servidor restringió las solicitudes")
+            val startTime = android.os.SystemClock.elapsedRealtime()
+            var checked = 0L
+            var withoutResult = 0L
+            var batch = 0L
+            var limited = false
+            try {
+                do {
+                    batch++
+                    val lines = if (automatic) List(100) {
+                        (1..8).map { alphabet[random.nextInt(alphabet.length)] }.joinToString("")
+                    } else manualLines
+                    var next = 0
+                    var inFlight = 0
+                    while ((next < lines.size || inFlight > 0) && !cancelled.get()) {
+                        while (next < lines.size && inFlight < 5 && !cancelled.get()) {
+                            val line = lines[next++]
+                            completion.submit(java.util.concurrent.Callable {
+                                try { inspect(line, filter) } catch (_: Exception) { ScanResult() }
+                            })
+                            inFlight++
+                        }
+                        if (inFlight == 0) break
+                        val result = completion.take().get()
+                        inFlight--
+                        checked++
+                        if (result.limited) { limited = true; cancelled.set(true) }
+                        if (result.book == null) withoutResult++
+                        val book = result.book
+                        val count = checked; val missed = withoutResult; val currentBatch = batch
+                        val seconds = (android.os.SystemClock.elapsedRealtime() - startTime).coerceAtLeast(1) / 1000.0
+                        val speed = String.format(java.util.Locale.US, "%.1f", count / seconds)
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) {
+                                if (book != null && results.none { it.page.trimEnd('/') == book.page.trimEnd('/') }) {
+                                    results.add(book); addBook(book); saveResults()
+                                }
+                                status.text = "Lote $currentBatch · Probados: $count · Sin resultado: $missed · Guardados: ${results.size} · $speed/s"
+                            }
+                        }
                     }
-                    if (response.statusCode() != 200) throw IllegalStateException("Respuesta inesperada")
-                    val doc = response.parse()
-                    val desc = doc.selectFirst("#fileDescription") ?: throw IllegalStateException("Archivo no encontrado o página no reconocida")
-                    fun field(label: String): String = desc.select("p").firstOrNull { it.selectFirst("span")?.text()?.trim()?.equals("$label:", true) == true }
-                        ?.ownText()?.trim().orEmpty()
-                    val title = field("Name")
-                    val href = doc.selectFirst("#fileDownload a#downloadB")?.attr("abs:href").orEmpty()
-                    val link = URI(href)
-                    if (title.isBlank() || link.scheme != "https" ||
-                        link.host?.lowercase() !in setOf("antupload.com", "www.antupload.com") ||
-                        !link.path.startsWith("/filed/") || link.userInfo != null || link.port != -1) throw IllegalStateException("Datos de descarga no reconocidos")
-                    val book = Book(title, field("Size"), field("Uploaded"), href, page)
-                    if (!filter || title.substringAfterLast('.', "").lowercase() in setOf("epub", "pdf", "mobi")) {
-                        runOnUiThread { if (!isFinishing && !isDestroyed) { if (results.none { it.page == book.page }) { results.add(book); addBook(book); saveResults() } } }
+                } while (automatic && !cancelled.get() && !Thread.currentThread().isInterrupted)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } catch (_: Exception) {
+                cancelled.set(true)
+            } finally {
+                pool.shutdownNow()
+                val wasLimited = limited
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) {
+                        analyze.isEnabled = true
+                        if (cancelled.get()) status.text = if (wasLimited) "Servidor limitó el análisis. Resultados conservados." else "Análisis detenido. Resultados conservados."
                     }
-                } catch (_: Exception) { failures++ }
-                checked++
-                val count = checked; val errors = failures; val currentBatch = batch
-                runOnUiThread { if (!isFinishing && !isDestroyed) status.text = "Lote $currentBatch · Probados: $count · Sin resultado o errores: $errors · Guardados: ${results.size}" }
-                if ((automatic || index < lines.lastIndex) && !cancelled.get()) {
-                    try { Thread.sleep(500) } catch (_: InterruptedException) { break }
                 }
             }
-            } while (automatic && !cancelled.get() && !Thread.currentThread().isInterrupted)
-            runOnUiThread { if (!isFinishing && !isDestroyed) {
-                analyze.isEnabled = true
-                if (cancelled.get()) status.text = "Análisis detenido o limitado por el servidor. Resultados conservados."
-            } }
         }
     }
     private fun saveResults() {
