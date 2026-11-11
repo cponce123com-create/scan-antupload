@@ -12,6 +12,9 @@ import android.view.Gravity
 import android.view.View
 import android.widget.*
 import org.jsoup.Jsoup
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicBoolean
 import java.net.URI
 import java.util.concurrent.Executors
 
@@ -23,6 +26,8 @@ class MainActivity : Activity() {
     private lateinit var analyze: Button
     private lateinit var onlyBooks: CheckBox
     private val results = mutableListOf<Book>()
+    private val cancelled = AtomicBoolean(false)
+    private val preferences by lazy { getSharedPreferences("scan_history", Context.MODE_PRIVATE) }
 
     data class Book(val title: String, val size: String, val date: String, val download: String, val page: String)
 
@@ -52,13 +57,19 @@ class MainActivity : Activity() {
         root.addView(onlyBooks)
         analyze = Button(this).apply { text = "Analizar enlaces"; setOnClickListener { scan() } }
         root.addView(analyze, LinearLayout.LayoutParams(-1, -2))
+        root.addView(Button(this).apply { text = "Detener análisis"; setOnClickListener { cancelled.set(true); status.text = "Deteniendo..." } })
         root.addView(Button(this).apply { text = "Descargar seleccionados"; setOnClickListener { downloadSelected() } })
+        root.addView(Button(this).apply { text = "Borrar resultados guardados"; setOnClickListener {
+            if (!analyze.isEnabled) { Toast.makeText(this@MainActivity, "Detén el análisis primero", Toast.LENGTH_SHORT).show() }
+            else { results.clear(); list.removeAllViews(); preferences.edit().remove("results").apply(); status.text = "Resultados borrados." }
+        } })
         status = TextView(this).apply { text = "Introduce hasta 100 enlaces o identificadores."; setPadding(0, dp(8), 0, dp(8)) }
         root.addView(status)
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply { addView(list) }
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
         setContentView(root)
+        restoreResults()
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -77,14 +88,19 @@ class MainActivity : Activity() {
         val lines = input.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }.distinct()
         if (lines.isEmpty() || lines.size > 100) { status.text = "Introduce entre 1 y 100 enlaces o identificadores."; return }
         val filter = onlyBooks.isChecked
-        results.clear(); list.removeAllViews(); analyze.isEnabled = false
+        results.clear(); list.removeAllViews(); preferences.edit().remove("results").apply(); cancelled.set(false); analyze.isEnabled = false
         status.text = "Analizando 0/${lines.size}..."
         worker.execute {
             var failures = 0
-            lines.forEachIndexed { index, line ->
+            for ((index, line) in lines.withIndex()) {
+                if (cancelled.get() || Thread.currentThread().isInterrupted) break
                 try {
                     val page = pageFor(line) ?: throw IllegalArgumentException("Enlace no válido")
-                    val response = Jsoup.connect(page).timeout(15000).followRedirects(false).execute()
+                    val response = Jsoup.connect(page).timeout(15000).followRedirects(false).ignoreHttpErrors(true).execute()
+                    if (response.statusCode() == 429 || response.statusCode() == 403) {
+                        cancelled.set(true)
+                        throw IllegalStateException("Servidor restringió las solicitudes")
+                    }
                     if (response.statusCode() != 200) throw IllegalStateException("Respuesta inesperada")
                     val doc = response.parse()
                     val desc = doc.selectFirst("#fileDescription") ?: throw IllegalStateException("Archivo no encontrado o página no reconocida")
@@ -98,15 +114,38 @@ class MainActivity : Activity() {
                         !link.path.startsWith("/filed/") || link.userInfo != null || link.port != -1) throw IllegalStateException("Datos de descarga no reconocidos")
                     val book = Book(title, field("Size"), field("Uploaded"), href, page)
                     if (!filter || title.substringAfterLast('.', "").lowercase() in setOf("epub", "pdf", "mobi")) {
-                        runOnUiThread { if (!isFinishing && !isDestroyed) { results.add(book); addBook(book) } }
+                        runOnUiThread { if (!isFinishing && !isDestroyed) { results.add(book); addBook(book); saveResults() } }
                     }
                 } catch (_: Exception) { failures++ }
                 val count = index + 1; val errors = failures
                 runOnUiThread { if (!isFinishing && !isDestroyed) status.text = "Analizados: $count/${lines.size} · Errores o no disponibles: $errors" }
-                if (index < lines.lastIndex) Thread.sleep(500)
+                if (index < lines.lastIndex && !cancelled.get()) {
+                    try { Thread.sleep(500) } catch (_: InterruptedException) { break }
+                }
             }
-            runOnUiThread { if (!isFinishing && !isDestroyed) analyze.isEnabled = true }
+            runOnUiThread { if (!isFinishing && !isDestroyed) {
+                analyze.isEnabled = true
+                if (cancelled.get()) status.text = "Análisis detenido o limitado por el servidor. Resultados conservados."
+            } }
         }
+    }
+    private fun saveResults() {
+        val array = JSONArray()
+        results.forEach { book ->
+            array.put(JSONObject().put("title", book.title).put("size", book.size).put("date", book.date).put("download", book.download).put("page", book.page))
+        }
+        preferences.edit().putString("results", array.toString()).apply()
+    }
+    private fun restoreResults() {
+        try {
+            val array = JSONArray(preferences.getString("results", "[]"))
+            for (i in 0 until minOf(array.length(), 100)) {
+                val item = array.getJSONObject(i)
+                val book = Book(item.getString("title"), item.optString("size"), item.optString("date"), item.getString("download"), item.getString("page"))
+                results.add(book); addBook(book)
+            }
+            if (results.isNotEmpty()) status.text = "${results.size} resultado(s) recuperados."
+        } catch (_: Exception) { status.text = "No se pudieron recuperar los resultados." }
     }
     private fun addBook(book: Book) {
         val box = CheckBox(this).apply {
