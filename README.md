@@ -1,12 +1,14 @@
 # Scan AntUpload
 
-Primera versión Android para comprobar enlaces o identificadores proporcionados y descargar libros con autorización.
+Aplicación Android para comprobar enlaces e identificadores y descargar archivos autorizados.
 
 ## Uso
-Pega hasta 100 enlaces o identificadores, uno por línea; analiza y selecciona los resultados. Las descargas se entregan al gestor de Android y aparecen en Descargas y sus notificaciones. El filtro utiliza la extensión y no comprueba el contenido del archivo.
+Pega hasta 100 enlaces o identificadores, uno por línea, o genera un lote hipotético de 100 identificadores de ocho caracteres. Pulsa Analizar enlaces y selecciona los resultados. La generación no garantiza que los identificadores existan. El botón Detener interrumpe el análisis entre solicitudes; también se detiene ante HTTP 403 o 429.
+
+El filtro usa la extensión y no comprueba el contenido del archivo. Los resultados se conservan en el dispositivo hasta iniciar un análisis nuevo o pulsar Borrar resultados guardados. Descargar seleccionados envía las tareas al gestor de Android, que muestra sus propias notificaciones.
 
 ## Compilación
-Usa Android Studio con JDK 17 y SDK 35, y Gradle 8.9. En GitHub Actions, el flujo Android APK genera un APK debug descargable como artefacto. No está firmado para distribución.
+Android Studio con JDK 17, SDK 35 y Gradle 8.9. El flujo Android APK de GitHub Actions genera un APK debug descargable como artefacto.
 
-## Estado y límites
-El análisis se hace secuencialmente y procesa hasta 100 entradas por lote, no genera combinaciones. La disponibilidad de AntUpload y sus políticas pueden cambiar. Las descargas no se han probado en dispositivos físicos; Android administra la cola y la reanudación según sus capacidades. La app no almacena historial después de cerrar ni valida la integridad del archivo. Al girar la pantalla los resultados se reinician.
+## Límites
+No hay ejecución de millones de combinaciones, búsqueda en segundo plano ni exportación. La app analiza secuencialmente hasta 100 entradas por lote. No garantiza reanudación de descargas, detección de contenido ni acceso continuo al sitio. Descargas y análisis no han sido probados en un dispositivo físico.
