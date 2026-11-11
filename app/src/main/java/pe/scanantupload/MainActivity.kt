@@ -22,6 +22,7 @@ class MainActivity : Activity() {
     private val worker = Executors.newSingleThreadExecutor()
     private lateinit var input: EditText
     private lateinit var status: TextView
+    private lateinit var activeIds: TextView
     private lateinit var list: LinearLayout
     private lateinit var analyze: Button
     private lateinit var onlyBooks: CheckBox
@@ -72,6 +73,8 @@ class MainActivity : Activity() {
         } })
         status = TextView(this).apply { text = "Introduce hasta 100 enlaces o identificadores."; setPadding(0, dp(8), 0, dp(8)) }
         root.addView(status)
+        activeIds = TextView(this).apply { text = "Consultando: —"; textSize = 13f }
+        root.addView(activeIds)
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply { addView(list) }
         root.addView(scroll, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -126,7 +129,12 @@ class MainActivity : Activity() {
         status.text = "Preparando análisis..."
         worker.execute {
             val pool = Executors.newFixedThreadPool(5)
-            val completion = java.util.concurrent.ExecutorCompletionService<ScanResult>(pool)
+            val completion = java.util.concurrent.ExecutorCompletionService<Pair<String, ScanResult>>(pool)
+            val active = linkedSetOf<String>()
+            fun showActive() {
+                val message = if (active.isEmpty()) "Consultando: —" else "Consultando: " + active.joinToString(" · ")
+                runOnUiThread { if (!isFinishing && !isDestroyed) activeIds.text = message }
+            }
             val random = java.security.SecureRandom()
             val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
             val startTime = android.os.SystemClock.elapsedRealtime()
@@ -145,13 +153,16 @@ class MainActivity : Activity() {
                     while ((next < lines.size || inFlight > 0) && !cancelled.get()) {
                         while (next < lines.size && inFlight < 5 && !cancelled.get()) {
                             val line = lines[next++]
+                            active.add(line)
+                            showActive()
                             completion.submit(java.util.concurrent.Callable {
-                                try { inspect(line, filter) } catch (_: Exception) { ScanResult() }
+                                line to (try { inspect(line, filter) } catch (_: Exception) { ScanResult() })
                             })
                             inFlight++
                         }
                         if (inFlight == 0) break
-                        val result = completion.take().get()
+                        val (line, result) = completion.take().get()
+                        active.remove(line); showActive()
                         inFlight--
                         checked++
                         if (result.limited) { limited = true; cancelled.set(true) }
@@ -176,6 +187,7 @@ class MainActivity : Activity() {
                 cancelled.set(true)
             } finally {
                 pool.shutdownNow()
+                active.clear(); showActive()
                 val wasLimited = limited
                 runOnUiThread {
                     if (!isFinishing && !isDestroyed) {
