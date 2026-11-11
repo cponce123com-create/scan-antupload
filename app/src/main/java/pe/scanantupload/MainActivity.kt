@@ -108,9 +108,7 @@ class MainActivity : Activity() {
         if (response.statusCode() != 200) return ScanResult()
         val doc = response.parse()
         val desc = doc.selectFirst("#fileDescription") ?: return ScanResult()
-        fun field(label: String): String = desc.select("p").firstOrNull {
-            it.selectFirst("span")?.text()?.trim()?.equals("$" + "label:", true) == true
-        }?.ownText()?.trim().orEmpty()
+        fun field(label: String): String = extractField(desc, label)
         val title = field("Name")
         val href = doc.selectFirst("#fileDownload a#downloadB")?.attr("abs:href").orEmpty()
         val link = URI(href)
