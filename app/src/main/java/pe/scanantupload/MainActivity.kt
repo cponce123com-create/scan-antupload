@@ -54,19 +54,10 @@ class MainActivity : Activity() {
         }
         root.addView(input, LinearLayout.LayoutParams(-1, -2))
         root.addView(Button(this).apply {
-            text = "Generar 100 identificadores de prueba"
+            text = "Iniciar escáner automático"
             setOnClickListener {
-                if (!analyze.isEnabled) {
-                    Toast.makeText(this@MainActivity, "Detén el análisis primero", Toast.LENGTH_SHORT).show()
-                } else {
-                    val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-                    val random = java.security.SecureRandom()
-                    val generated = (1..100).joinToString("\n") {
-                        (1..8).map { alphabet[random.nextInt(alphabet.length)] }.joinToString("")
-                    }
-                    input.setText(generated)
-                    Toast.makeText(this@MainActivity, "Identificadores hipotéticos; no se garantiza que existan.", Toast.LENGTH_LONG).show()
-                }
+                if (!analyze.isEnabled) Toast.makeText(this@MainActivity, "Ya hay un análisis en curso", Toast.LENGTH_SHORT).show()
+                else scan(automatic = true)
             }
         })
         onlyBooks = CheckBox(this).apply { text = "Mostrar solo EPUB, PDF y MOBI"; isChecked = true }
@@ -100,15 +91,24 @@ class MainActivity : Activity() {
             else "https://www.antupload.com" + uri.path
         } catch (_: Exception) { null }
     }
-    private fun scan() {
-        val lines = input.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }.distinct()
-        if (lines.isEmpty() || lines.size > 100) { status.text = "Introduce entre 1 y 100 enlaces o identificadores."; return }
+    private fun scan(automatic: Boolean = false) {
+        val manualLines = input.text.toString().lines().map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (!automatic && (manualLines.isEmpty() || manualLines.size > 100)) { status.text = "Introduce entre 1 y 100 enlaces o identificadores."; return }
         val filter = onlyBooks.isChecked
-        results.clear(); list.removeAllViews(); preferences.edit().remove("results").apply(); cancelled.set(false); analyze.isEnabled = false
-        status.text = "Analizando 0/${lines.size}..."
+        cancelled.set(false); analyze.isEnabled = false
+        status.text = "Preparando análisis..."
         worker.execute {
-            var failures = 0
-            for ((index, line) in lines.withIndex()) {
+            var failures = 0L
+            var checked = 0L
+            var batch = 0L
+            val random = java.security.SecureRandom()
+            val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+            do {
+              batch++
+              val lines = if (automatic) List(100) {
+                  (1..8).map { alphabet[random.nextInt(alphabet.length)] }.joinToString("")
+              } else manualLines
+              for ((index, line) in lines.withIndex()) {
                 if (cancelled.get() || Thread.currentThread().isInterrupted) break
                 try {
                     val page = pageFor(line) ?: throw IllegalArgumentException("Enlace no válido")
@@ -130,15 +130,17 @@ class MainActivity : Activity() {
                         !link.path.startsWith("/filed/") || link.userInfo != null || link.port != -1) throw IllegalStateException("Datos de descarga no reconocidos")
                     val book = Book(title, field("Size"), field("Uploaded"), href, page)
                     if (!filter || title.substringAfterLast('.', "").lowercase() in setOf("epub", "pdf", "mobi")) {
-                        runOnUiThread { if (!isFinishing && !isDestroyed) { results.add(book); addBook(book); saveResults() } }
+                        runOnUiThread { if (!isFinishing && !isDestroyed) { if (results.none { it.page == book.page }) { results.add(book); addBook(book); saveResults() } } }
                     }
                 } catch (_: Exception) { failures++ }
-                val count = index + 1; val errors = failures
-                runOnUiThread { if (!isFinishing && !isDestroyed) status.text = "Analizados: $count/${lines.size} · Errores o no disponibles: $errors" }
-                if (index < lines.lastIndex && !cancelled.get()) {
+                checked++
+                val count = checked; val errors = failures; val currentBatch = batch
+                runOnUiThread { if (!isFinishing && !isDestroyed) status.text = "Lote $currentBatch · Probados: $count · Sin resultado o errores: $errors · Guardados: ${results.size}" }
+                if ((automatic || index < lines.lastIndex) && !cancelled.get()) {
                     try { Thread.sleep(500) } catch (_: InterruptedException) { break }
                 }
             }
+            } while (automatic && !cancelled.get() && !Thread.currentThread().isInterrupted)
             runOnUiThread { if (!isFinishing && !isDestroyed) {
                 analyze.isEnabled = true
                 if (cancelled.get()) status.text = "Análisis detenido o limitado por el servidor. Resultados conservados."
@@ -155,7 +157,7 @@ class MainActivity : Activity() {
     private fun restoreResults() {
         try {
             val array = JSONArray(preferences.getString("results", "[]"))
-            for (i in 0 until minOf(array.length(), 100)) {
+            for (i in 0 until array.length()) {
                 val item = array.getJSONObject(i)
                 val book = Book(item.getString("title"), item.optString("size"), item.optString("date"), item.getString("download"), item.getString("page"))
                 results.add(book); addBook(book)
@@ -192,5 +194,5 @@ class MainActivity : Activity() {
         }
         Toast.makeText(this, if (count > 0) "$count descarga(s) enviadas a Android" else "Selecciona al menos un libro", Toast.LENGTH_SHORT).show()
     }
-    override fun onDestroy() { worker.shutdownNow(); super.onDestroy() }
+    override fun onDestroy() { cancelled.set(true); worker.shutdownNow(); super.onDestroy() }
 }
