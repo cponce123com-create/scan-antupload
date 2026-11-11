@@ -1,12 +1,16 @@
 # Scan AntUpload
 
-Primera versión Android para comprobar enlaces o identificadores proporcionados y descargar libros con autorización.
+Aplicación Android para analizar enlaces e identificadores y descargar archivos autorizados.
 
 ## Uso
-Pega hasta 100 enlaces o identificadores, uno por línea; analiza y selecciona los resultados. Las descargas se entregan al gestor de Android y aparecen en Descargas y sus notificaciones. El filtro utiliza la extensión y no comprueba el contenido del archivo.
+El escáner automático genera lotes de 100 identificadores alfanuméricos de ocho caracteres y los consulta con hasta cinco solicitudes simultáneas. Continúa con el siguiente lote hasta que se pulse Detener, se destruya la actividad o el servidor responda 403 o 429. La generación aleatoria no garantiza encontrar archivos ni evita repetir identificadores ya probados.
+
+La velocidad real se muestra en consultas por segundo y depende del servidor y la conexión.
+
+También se pueden pegar hasta 100 enlaces o identificadores para analizarlos manualmente. Los resultados encontrados que coinciden con el filtro se conservan entre lotes y al cerrar la app, hasta que el usuario los borre. El filtro comprueba solamente la extensión. Las descargas seleccionadas se envían al gestor de Android.
 
 ## Compilación
-Usa Android Studio con JDK 17 y SDK 35, y Gradle 8.9. En GitHub Actions, el flujo Android APK genera un APK debug descargable como artefacto. No está firmado para distribución.
+Android Studio con JDK 17, SDK 35 y Gradle 8.9. El flujo Android APK de GitHub Actions genera un APK debug como artefacto.
 
-## Estado y límites
-El análisis se hace secuencialmente y procesa hasta 100 entradas por lote, no genera combinaciones. La disponibilidad de AntUpload y sus políticas pueden cambiar. Las descargas no se han probado en dispositivos físicos; Android administra la cola y la reanudación según sus capacidades. La app no almacena historial después de cerrar ni valida la integridad del archivo. Al girar la pantalla los resultados se reinician.
+## Límites
+El escaneo funciona mientras la actividad esté activa, no en segundo plano. No conserva una lista de todas las combinaciones probadas, no evita repeticiones aleatorias y no garantiza reanudación de descargas ni validez del contenido. La disponibilidad del servidor puede cambiar. Requiere pruebas en un dispositivo real.
