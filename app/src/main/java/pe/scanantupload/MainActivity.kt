@@ -53,6 +53,22 @@ class MainActivity : Activity() {
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
         }
         root.addView(input, LinearLayout.LayoutParams(-1, -2))
+        root.addView(Button(this).apply {
+            text = "Generar 100 identificadores de prueba"
+            setOnClickListener {
+                if (!analyze.isEnabled) {
+                    Toast.makeText(this@MainActivity, "Detén el análisis primero", Toast.LENGTH_SHORT).show()
+                } else {
+                    val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+                    val random = java.security.SecureRandom()
+                    val generated = (1..100).joinToString("\n") {
+                        (1..8).map { alphabet[random.nextInt(alphabet.length)] }.joinToString("")
+                    }
+                    input.setText(generated)
+                    Toast.makeText(this@MainActivity, "Identificadores hipotéticos; no se garantiza que existan.", Toast.LENGTH_LONG).show()
+                }
+            }
+        })
         onlyBooks = CheckBox(this).apply { text = "Mostrar solo EPUB, PDF y MOBI"; isChecked = true }
         root.addView(onlyBooks)
         analyze = Button(this).apply { text = "Analizar enlaces"; setOnClickListener { scan() } }
